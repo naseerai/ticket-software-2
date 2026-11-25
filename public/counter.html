@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#141414">
+  <title>Counter sales</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="icon" type="image/png" href="/icon.png">
+  <link rel="apple-touch-icon" href="/icon.png">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="counter-page">
+  <header class="scan-top">
+    <a class="brand" href="/counter" data-brand></a>
+    <span class="spacer"></span>
+    <span class="counter-who" id="who"></span>
+    <a href="/scan">Scanner</a>
+    <a href="/admin" id="admin-link" class="hidden">Admin</a>
+    <button class="link" data-action="logout">Log out</button>
+  </header>
+
+  <main class="counter-main">
+    <div class="counter-col">
+      <!-- ===== New sale ===== -->
+      <form class="card counter-card" id="sale" novalidate>
+        <div class="row"><h1 style="font-size:22px">New counter sale</h1><span class="spacer"></span><span class="badge" id="seats-badge"></span></div>
+        <div>
+          <label for="event">Event</label>
+          <select id="event"></select>
+          <p class="muted small" id="event-note" style="margin-top:6px"></p>
+        </div>
+
+        <div>
+          <span class="label">Tickets</span>
+          <div class="tiers" id="types"></div>
+        </div>
+
+        <div class="form-grid">
+          <div>
+            <label for="phone">Mobile number * <span class="muted">(ticket is sent here)</span></label>
+            <div class="phone-input"><span>+91</span><input id="phone" type="tel" inputmode="numeric" maxlength="10" autocomplete="off" placeholder="98765 43210"></div>
+            <p class="muted small" id="phone-hint" style="margin-top:4px"></p>
+          </div>
+          <div><label for="name">Customer name *</label><input id="name" maxlength="100" autocomplete="off" placeholder="Full name"></div>
+          <div class="full"><label for="city">City <span class="muted">(optional)</span></label><input id="city" maxlength="80" autocomplete="off" placeholder="e.g. Hyderabad"></div>
+        </div>
+
+        <div id="pay-wrap">
+          <span class="label">Payment received by</span>
+          <div class="pay-modes">
+            <button type="button" class="pay-mode" data-mode="upi" data-icon="phone">UPI</button>
+            <button type="button" class="pay-mode" data-mode="cash" data-icon="rupee">Cash</button>
+          </div>
+          <div id="upi-extra" class="hidden" style="margin-top:12px">
+            <label for="ref">UPI transaction ID / UTR <span class="muted">(optional)</span></label>
+            <input id="ref" maxlength="60" autocomplete="off" placeholder="12-digit UTR from the payment app">
+          </div>
+          <div id="cash-extra" class="hidden" style="margin-top:12px">
+            <label for="received">Cash received <span class="muted">(optional — shows the change)</span></label>
+            <input id="received" type="number" inputmode="decimal" min="0" step="any" placeholder="0">
+            <p class="change hidden" id="change"></p>
+          </div>
+        </div>
+
+        <div class="counter-total">
+          <span><b style="color:var(--ink)">Total</b> <span class="muted small" id="count"></span></span>
+          <strong id="total">₹0</strong>
+        </div>
+        <div id="sale-error" class="alert error hidden"></div>
+        <button class="btn primary lg block" id="submit">Add tickets</button>
+      </form>
+
+      <!-- ===== Ticket issued ===== -->
+      <section class="card counter-card hidden" id="done">
+        <div class="done-head">
+          <span class="tick" data-icon="check" data-icon-class="lg"></span>
+          <div><h2>Ticket issued</h2><p class="muted small" id="done-sub"></p></div>
+        </div>
+        <div class="done-body">
+          <img id="done-qr" alt="Ticket QR code" width="180" height="180">
+          <div class="done-info">
+            <div><small>Ticket ID</small><code id="done-code"></code></div>
+            <div><small>Customer</small><b id="done-customer"></b></div>
+            <div><small>Paid</small><b id="done-paid"></b></div>
+            <div class="msg-states" id="done-msgs"></div>
+          </div>
+        </div>
+        <div class="done-actions">
+          <button type="button" class="btn primary lg" id="print" data-icon="printer">Print ticket</button>
+          <button type="button" class="btn ghost lg" id="resend" data-icon="phone">Resend WhatsApp &amp; SMS</button>
+          <button type="button" class="btn ghost lg" id="new-sale" data-icon="plus">New sale</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===== Today ===== -->
+    <aside class="counter-col">
+      <div class="kpis counter-kpis" id="kpis"></div>
+      <div class="card counter-card">
+        <div class="row"><h2 style="font-size:18px" id="sales-title">Today’s sales</h2><span class="spacer"></span><button type="button" class="btn ghost sm" id="refresh">Refresh</button></div>
+        <ul class="sales-list" id="sales"></ul>
+        <p class="muted small hidden" id="sales-empty">No counter sales yet today.</p>
+      </div>
+    </aside>
+  </main>
+
+  <script src="/common.js"></script>
+  <script>
+    let me, events = [], event = null, mode = '', lastSale = null;
+    const qty = new Map();   // ticket type id -> how many
+    const people = () => [...qty.values()].reduce((a, b) => a + b, 0);
+    const total = () => (event ? event.ticketTypes.reduce((s, t) => s + (qty.get(t.id) || 0) * t.price, 0) : 0);
+    const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+    const MAX_TICKETS = 21;
+
+    // ----- events -----
+    async function loadEvents(keepId) {
+      events = await api('/api/counter/events');
+      const sel = $('#event');
+      if (!events.length) {
+        sel.innerHTML = '<option value="">No events</option>';
+        $('#event-note').textContent = 'Create an event in Admin first.';
+        event = null; renderTypes(); update();
+        return;
+      }
+      sel.innerHTML = events.map((e) => `<option value="${e.id}">${esc(e.title)} — ${esc(fmtDay(e.startsAt))}${e.isActive ? '' : ' (hidden online)'}</option>`).join('');
+      let id = keepId;
+      if (!id) { try { id = localStorage.getItem('counterEvent'); } catch { /* storage blocked */ } }
+      // Default: the nearest event that hasn't finished long ago.
+      if (!events.some((e) => String(e.id) === String(id))) {
+        const soon = events.find((e) => new Date(e.startsAt) > new Date(Date.now() - 86400_000)) || events[events.length - 1];
+        id = soon.id;
+      }
+      sel.value = String(id);
+      pickEvent(Number(id), !!keepId);
+    }
+
+    function pickEvent(id, keepQty = false) {
+      event = events.find((e) => e.id === id) || null;
+      if (!keepQty) qty.clear();
+      try { localStorage.setItem('counterEvent', String(id)); } catch { /* storage blocked */ }
+      $('#event-note').innerHTML = event ? [
+        `${icon('calendar')} ${esc(fmtDate(event.startsAt))}`,
+        event.venue ? `${icon('pin')} ${esc(event.venue)}` : '',
+        !event.bookingOpen ? '<span class="badge">Online bookings closed</span>' : '',
+      ].filter(Boolean).join(' &nbsp; ') : '';
+      $('#seats-badge').textContent = event && event.seatsLeft !== null ? `${event.seatsLeft} seats left` : '';
+      $('#seats-badge').className = `badge ${event?.seatsLeft === 0 ? 'bad' : event?.seatsLeft !== null && event?.seatsLeft <= 20 ? 'warn' : ''}`;
+      renderTypes();
+      update();
+    }
+    $('#event').addEventListener('change', (e) => pickEvent(Number(e.target.value)));
+
+    // ----- ticket categories -----
+    function renderTypes() {
+      if (!event) { $('#types').innerHTML = ''; return; }
+      const n = people();
+      $('#types').innerHTML = event.ticketTypes.map((t) => {
+        const q = qty.get(t.id) || 0;
+        const soldOut = t.seatsLeft === 0;
+        const canAdd = !soldOut && n < MAX_TICKETS && (t.seatsLeft === null || q < t.seatsLeft);
+        return `
+        <div class="tier ${q ? 'selected' : ''} ${soldOut ? 'soldout' : ''}" data-id="${t.id}">
+          <div class="tier-text">
+            <h3>${esc(t.name)}</h3>
+            <div class="tier-price-line"><b>${esc(money(t.price, event.currency))}</b>
+              ${soldOut ? '<span class="badge bad">Sold out</span>' : t.seatsLeft !== null ? `<span class="badge ${t.seatsLeft <= 20 ? 'warn' : ''}">${t.seatsLeft} left</span>` : ''}</div>
+          </div>
+          <div class="qty">${soldOut ? '' : `
+            <div class="stepper ${q ? '' : 'empty'}">
+              <button type="button" data-act="minus" aria-label="One less ${esc(t.name)}" ${q ? '' : 'disabled'}>${icon('minus')}</button>
+              <span aria-live="polite">${q}</span>
+              <button type="button" data-act="add" aria-label="One more ${esc(t.name)}" ${canAdd ? '' : 'disabled'}>${icon('plus')}</button>
+            </div>`}</div>
+        </div>`;
+      }).join('');
+    }
+    $('#types').addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (!btn || btn.disabled) return;
+      const id = Number(btn.closest('.tier').dataset.id);
+      qty.set(id, Math.max(0, (qty.get(id) || 0) + (btn.dataset.act === 'add' ? 1 : -1)));
+      renderTypes();
+      update();
+    });
+
+    // ----- payment mode -----
+    function setMode(m) {
+      mode = m;
+      document.querySelectorAll('.pay-mode').forEach((b) => b.classList.toggle('active', b.dataset.mode === m));
+      $('#upi-extra').classList.toggle('hidden', m !== 'upi');
+      $('#cash-extra').classList.toggle('hidden', m !== 'cash');
+      update();
+    }
+    document.querySelectorAll('.pay-mode').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+    $('#received').addEventListener('input', update);
+
+    function update() {
+      const n = people(), sum = total();
+      $('#count').textContent = n ? `· ${plural(n, 'ticket')}` : '';
+      $('#total').textContent = n ? money(sum, event?.currency) : amount(0);
+      $('#pay-wrap').classList.toggle('hidden', n > 0 && sum === 0);
+      // Cash: show the change to give back (or what is still owed).
+      const got = Number($('#received').value);
+      const showChange = mode === 'cash' && got > 0 && n > 0;
+      const diff = Math.round((got - sum) * 100) / 100;
+      $('#change').className = `change ${diff < 0 ? 'short' : ''} ${showChange ? '' : 'hidden'}`;
+      $('#change').textContent = diff < 0 ? `${amount(-diff)} still to collect` : `Give back ${amount(diff)}`;
+      const btn = $('#submit');
+      if (!btn.dataset.busy) {
+        btn.textContent = !n ? 'Add tickets'
+          : sum === 0 ? `Issue ${plural(n, 'free ticket')}`
+          : `Issue ${plural(n, 'ticket')} · ${money(sum, event?.currency)}${mode ? ` by ${mode === 'upi' ? 'UPI' : 'cash'}` : ''}`;
+      }
+    }
+
+    // ----- returning customer: fill in name/city from the mobile number -----
+    let lookupFor = '';
+    $('#phone').addEventListener('input', async (e) => {
+      e.target.value = e.target.value.replace(/\D/g, '').slice(0, 10);
+      const phone = e.target.value;
+      $('#phone-hint').textContent = '';
+      if (phone.length !== 10 || phone === lookupFor) return;
+      lookupFor = phone;
+      try {
+        const c = await api(`/api/counter/customer?phone=${phone}`);
+        if ($('#phone').value !== phone || !c.found) return;
+        if (!$('#name').value.trim()) $('#name').value = c.name;
+        if (!$('#city').value.trim()) $('#city').value = c.city;
+        $('#phone-hint').innerHTML = `${icon('check')} Returning customer — details filled in`;
+      } catch (err) { $('#phone-hint').textContent = err.message; }
+    });
+
+    // ----- issue ticket -----
+    $('#sale').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = $('#sale-error');
+      errEl.classList.add('hidden');
+      const n = people(), sum = total();
+      const fail = (msg, el) => { showAlert(errEl, msg); el?.focus(); };
+      if (!event) return fail('Choose an event');
+      if (!n) return fail('Add at least one ticket');
+      if (!/^[6-9]\d{9}$/.test($('#phone').value)) return fail('Enter a valid 10-digit mobile number', $('#phone'));
+      if (!$('#name').value.trim()) return fail('Enter the customer’s name', $('#name'));
+      if (sum > 0 && !mode) return fail('Choose UPI or Cash');
+      const summary = `${plural(n, 'ticket')} for ${event.title}\n${$('#name').value.trim()} · +91 ${$('#phone').value}\n`
+        + (sum ? `${money(sum, event.currency)} received by ${mode === 'upi' ? 'UPI' : 'CASH'}` : 'Free tickets');
+      if (!confirm(`Issue this ticket?\n\n${summary}`)) return;
+
+      const btn = $('#submit');
+      btn.disabled = true; btn.dataset.busy = '1'; btn.textContent = 'Issuing ticket & sending…';
+      try {
+        const sale = await api('/api/counter/bookings', { body: {
+          eventId: event.id, name: $('#name').value, phone: $('#phone').value, city: $('#city').value,
+          paymentMode: sum ? mode : '', paymentRef: mode === 'upi' ? $('#ref').value : '',
+          items: [...qty].filter(([, q]) => q > 0).map(([ticketTypeId, q]) => ({ ticketTypeId, qty: q })),
+        } });
+        showDone(sale);
+        loadSales();
+        loadEvents(event.id).catch(() => {});   // fresh seat counts
+      } catch (err) {
+        if (err.status === 401) return logout();
+        showAlert(errEl, err.message);
+        if (err.status === 409) loadEvents(event.id).catch(() => {});   // seats changed
+      } finally {
+        btn.disabled = false; delete btn.dataset.busy; update();
+      }
+    });
+
+    // ----- ticket issued -----
+    const MSG = {
+      sent: ['ok', 'Sent'], sending: ['', 'Sending…'], 'not set up': ['warn', 'Not set up'],
+      skipped: ['warn', 'Not set up'], failed: ['bad', 'Failed'], 'no mobile': ['bad', 'No mobile'],
+    };
+    const msgChip = (label, s) => { const [cls, text] = MSG[s] || ['', s]; return `<span class="badge ${cls}">${label}: ${esc(text)}</span>`; };
+    const renderMsgs = (m) => { $('#done-msgs').innerHTML = msgChip('WhatsApp', m.whatsapp) + msgChip('SMS', m.sms); };
+
+    function showDone(sale) {
+      lastSale = sale;
+      $('#done-sub').textContent = `${plural(sale.people, 'ticket')} · ${sale.event.title}`;
+      $('#done-qr').src = `/api/tickets/${encodeURIComponent(sale.code)}/qr.png`;
+      $('#done-code').textContent = sale.code;
+      $('#done-customer').textContent = `${sale.name} · +91 ${sale.phone}`;
+      $('#done-paid').textContent = sale.amount ? `${money(sale.amount)} by ${sale.mode === 'upi' ? 'UPI' : 'Cash'}${sale.paymentRef ? ` (${sale.paymentRef})` : ''}` : 'Free';
+      renderMsgs(sale.messages);
+      $('#sale').classList.add('hidden');
+      $('#done').classList.remove('hidden');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    const openPrint = (code) => window.open(`${pageUrl.ticket(code)}?print=1`, '_blank');
+    $('#print').addEventListener('click', () => openPrint(lastSale.code));
+    $('#resend').addEventListener('click', async () => {
+      const btn = $('#resend'); btn.disabled = true;
+      renderMsgs({ whatsapp: 'sending', sms: 'sending' });
+      try { renderMsgs((await api(`/api/counter/bookings/${encodeURIComponent(lastSale.code)}/resend`, { method: 'POST' })).messages); toast('Sent again'); }
+      catch (err) { toast(err.message); renderMsgs(lastSale.messages); }
+      finally { btn.disabled = false; }
+    });
+    $('#new-sale').addEventListener('click', () => {
+      qty.clear();
+      for (const id of ['phone', 'name', 'city', 'ref', 'received']) $(`#${id}`).value = '';
+      $('#phone-hint').textContent = '';
+      lookupFor = '';
+      setMode('');
+      renderTypes();
+      $('#done').classList.add('hidden');
+      $('#sale').classList.remove('hidden');
+      $('#sale-error').classList.add('hidden');
+      window.scrollTo({ top: 0 });
+    });
+
+    // ----- today's sales -----
+    async function loadSales() {
+      try {
+        const r = await api('/api/counter/sales');
+        const t = r.totals;
+        $('#sales-title').textContent = r.scope === 'all' ? 'Today’s counter sales (everyone)' : 'Your sales today';
+        const kpi = (ic, label, value) => `<div class="kpi"><span class="kpi-label">${icon(ic)}${esc(label)}</span><span class="kpi-value">${value}</span></div>`;
+        $('#kpis').innerHTML = kpi('ticket', 'Tickets', t.tickets) + kpi('rupee', 'Cash', esc(amount(t.cash))) + kpi('phone', 'UPI', esc(amount(t.upi)));
+        $('#sales-empty').classList.toggle('hidden', r.sales.length > 0);
+        $('#sales').innerHTML = r.sales.map((s) => `
+          <li class="${s.status === 'paid' ? '' : 'cancelled'}">
+            <div class="sale-main">
+              <b>${esc(s.name)}</b>
+              <span class="muted small">${esc(fmtTime(s.paidAt))} · ${plural(s.people, 'ticket')} · ${esc(s.event.title)}${r.scope === 'all' && s.soldBy ? ` · by ${esc(s.soldBy)}` : ''}</span>
+            </div>
+            <div class="sale-side">
+              <b>${esc(money(s.amount))}</b>
+              ${s.status === 'paid'
+                ? `<span class="badge ${s.mode === 'cash' ? 'warn' : s.mode === 'upi' ? 'accent' : ''}">${s.mode === 'cash' ? 'Cash' : s.mode === 'upi' ? 'UPI' : 'Free'}</span>`
+                : '<span class="badge bad">Cancelled</span>'}
+            </div>
+            ${s.status === 'paid' ? `<button type="button" class="btn ghost sm icon-only" aria-label="Print ticket" data-print="${esc(s.code)}">${icon('printer')}</button>` : ''}
+          </li>`).join('');
+      } catch (err) {
+        if (err.status === 401) return logout();
+        toast(err.message);
+      }
+    }
+    $('#sales').addEventListener('click', (e) => { const b = e.target.closest('[data-print]'); if (b) openPrint(b.dataset.print); });
+    $('#refresh').addEventListener('click', () => { loadSales(); loadEvents(event?.id).catch(() => {}); });
+
+    (async () => {
+      me = await requireLogin(['admin', 'counter']);
+      if (!me) return;
+      $('#who').textContent = me.name;
+      if (me.role === 'admin') $('#admin-link').classList.remove('hidden');
+      try { await loadEvents(); } catch (err) { showAlert($('#sale-error'), err.message); }
+      update();
+      loadSales();
+    })();
+  </script>
+</body>
+</html>
